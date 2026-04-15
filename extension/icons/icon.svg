@@ -1,14 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-  <!-- Rounded rectangle background in amber -->
-  <rect x="4" y="4" width="120" height="120" rx="24" ry="24" fill="#c8713a"/>
-  <!-- White "M" letter centered -->
-  <text
-    x="64"
-    y="90"
-    font-family="Georgia, serif"
-    font-size="80"
-    font-weight="bold"
-    fill="white"
-    text-anchor="middle"
-  >M</text>
+  <rect x="4" y="4" width="120" height="120" rx="24" ry="24" fill="#5a6b7a"/>
+  <rect x="28" y="30" width="44" height="32" rx="8" fill="none" stroke="#fffdf9" stroke-width="8"/>
+  <rect x="56" y="58" width="44" height="32" rx="8" fill="none" stroke="#fffdf9" stroke-width="8" opacity="0.96"/>
+  <circle cx="92" cy="34" r="7" fill="#d4b896"/>
 </svg>

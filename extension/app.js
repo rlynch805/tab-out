@@ -26,6 +26,128 @@
 // All open tabs — populated by fetchOpenTabs()
 let openTabs = [];
 
+const DEFAULT_CONFIG = window.TAB_DESK_CONFIG_DEFAULTS || {};
+const LOCAL_CONFIG = window.TAB_DESK_CONFIG_LOCAL || {};
+
+function mergeConfig() {
+  const legacyLandingPatterns =
+    typeof LOCAL_LANDING_PAGE_PATTERNS !== 'undefined' ? LOCAL_LANDING_PAGE_PATTERNS : [];
+  const legacyCustomGroups =
+    typeof LOCAL_CUSTOM_GROUPS !== 'undefined' ? LOCAL_CUSTOM_GROUPS : [];
+
+  return {
+    brand: {
+      extensionName: 'Tab Desk',
+      shortName: 'Tab Desk',
+      authorName: 'Ryan Lynch',
+      authorUrl: 'https://github.com/rlynch805',
+      repoLabel: 'Tab Desk',
+      repoUrl: 'https://github.com/rlynch805/tab-out',
+      footerNote: 'personal fork of Tab Out',
+      ...(DEFAULT_CONFIG.brand || {}),
+      ...(LOCAL_CONFIG.brand || {}),
+    },
+    ui: {
+      openTabsTitle: 'Open tabs',
+      savedTabsTitle: 'Saved for later',
+      savedTabsEmptyState: 'Nothing saved. Living in the moment.',
+      archiveTitle: 'Archive',
+      landingGroupLabel: 'Homepages',
+      duplicateTabsLabel: 'Tab Desk',
+      ...(DEFAULT_CONFIG.ui || {}),
+      ...(LOCAL_CONFIG.ui || {}),
+    },
+    domainAliases: {
+      ...(DEFAULT_CONFIG.domainAliases || {}),
+      ...(LOCAL_CONFIG.domainAliases || {}),
+    },
+    landingPagePatterns: [
+      ...((DEFAULT_CONFIG.landingPagePatterns) || []),
+      ...legacyLandingPatterns,
+      ...((LOCAL_CONFIG.landingPagePatterns) || []),
+    ],
+    customGroups: [
+      ...((DEFAULT_CONFIG.customGroups) || []),
+      ...legacyCustomGroups,
+      ...((LOCAL_CONFIG.customGroups) || []),
+    ],
+    titleCleanupRules: [
+      ...((DEFAULT_CONFIG.titleCleanupRules) || []),
+      ...((LOCAL_CONFIG.titleCleanupRules) || []),
+    ],
+    localDev: {
+      enabled: true,
+      hosts: ['localhost', '127.0.0.1'],
+      groupKey: 'local-dev',
+      groupLabel: 'Local Dev',
+      ...(DEFAULT_CONFIG.localDev || {}),
+      ...(LOCAL_CONFIG.localDev || {}),
+      portLabels: {
+        ...((DEFAULT_CONFIG.localDev && DEFAULT_CONFIG.localDev.portLabels) || {}),
+        ...((LOCAL_CONFIG.localDev && LOCAL_CONFIG.localDev.portLabels) || {}),
+      },
+    },
+  };
+}
+
+const CONFIG = mergeConfig();
+
+function hostnameMatchesRule(hostname, rule = {}) {
+  if (!hostname) return false;
+  if (rule.hostname) return hostname === rule.hostname;
+  if (rule.hostnameEndsWith) return hostname.endsWith(rule.hostnameEndsWith);
+  if (Array.isArray(rule.hostnames)) return rule.hostnames.includes(hostname);
+  return false;
+}
+
+function isLocalDevHost(hostname) {
+  if (!CONFIG.localDev || CONFIG.localDev.enabled === false) return false;
+  const hosts = CONFIG.localDev.hosts || [];
+  return hosts.includes(hostname);
+}
+
+function getLocalDevLabelPrefix(url) {
+  try {
+    const parsed = new URL(url);
+    if (!isLocalDevHost(parsed.hostname)) return '';
+    const portLabels = CONFIG.localDev.portLabels || {};
+    if (parsed.port && portLabels[parsed.port]) return `${portLabels[parsed.port]} (${parsed.port})`;
+    if (parsed.port) return parsed.port;
+  } catch {}
+  return '';
+}
+
+function applyBranding() {
+  document.title = CONFIG.brand.extensionName;
+
+  const dupeBrand = document.getElementById('dupeBrandName');
+  if (dupeBrand) dupeBrand.textContent = CONFIG.ui.duplicateTabsLabel;
+
+  const deferredSectionTitle = document.getElementById('deferredSectionTitle');
+  if (deferredSectionTitle) deferredSectionTitle.textContent = CONFIG.ui.savedTabsTitle;
+
+  const deferredEmpty = document.getElementById('deferredEmpty');
+  if (deferredEmpty) deferredEmpty.textContent = CONFIG.ui.savedTabsEmptyState;
+
+  const archiveToggleLabel = document.getElementById('archiveToggleLabel');
+  if (archiveToggleLabel) archiveToggleLabel.textContent = CONFIG.ui.archiveTitle;
+
+  const footerRepoLink = document.getElementById('footerRepoLink');
+  if (footerRepoLink) {
+    footerRepoLink.textContent = CONFIG.brand.repoLabel;
+    footerRepoLink.href = CONFIG.brand.repoUrl;
+  }
+
+  const footerAuthorLink = document.getElementById('footerAuthorLink');
+  if (footerAuthorLink) {
+    footerAuthorLink.textContent = CONFIG.brand.authorName;
+    footerAuthorLink.href = CONFIG.brand.authorUrl;
+  }
+
+  const footerForkNote = document.getElementById('footerForkNote');
+  if (footerForkNote) footerForkNote.textContent = CONFIG.brand.footerNote ? ` · ${CONFIG.brand.footerNote}` : '';
+}
+
 /**
  * fetchOpenTabs()
  *
@@ -519,7 +641,7 @@ function getDateDisplay() {
    ---------------------------------------------------------------- */
 
 // Map of known hostnames → friendly display names.
-const FRIENDLY_DOMAINS = {
+const BASE_FRIENDLY_DOMAINS = {
   'github.com':           'GitHub',
   'www.github.com':       'GitHub',
   'gist.github.com':      'GitHub Gist',
@@ -588,6 +710,11 @@ const FRIENDLY_DOMAINS = {
   'local-files':          'Local Files',
 };
 
+const FRIENDLY_DOMAINS = {
+  ...BASE_FRIENDLY_DOMAINS,
+  ...(CONFIG.domainAliases || {}),
+};
+
 function friendlyDomain(hostname) {
   if (!hostname) return '';
   if (FRIENDLY_DOMAINS[hostname]) return FRIENDLY_DOMAINS[hostname];
@@ -611,7 +738,7 @@ function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
 
-function stripTitleNoise(title) {
+function stripTitleNoise(title, url = '') {
   if (!title) return '';
   // Strip leading notification count: "(2) Title"
   title = title.replace(/^\(\d+\+?\)\s*/, '');
@@ -623,7 +750,23 @@ function stripTitleNoise(title) {
   // Clean X/Twitter format
   title = title.replace(/\s+on X:\s*/, ': ');
   title = title.replace(/\s*\/\s*X\s*$/, '');
-  return title.trim();
+
+  let hostname = '';
+  try { hostname = new URL(url).hostname; } catch {}
+
+  for (const rule of CONFIG.titleCleanupRules || []) {
+    if ((rule.hostname || rule.hostnameEndsWith || rule.hostnames) && !hostnameMatchesRule(hostname, rule)) {
+      continue;
+    }
+
+    if (rule.match instanceof RegExp) {
+      title = title.replace(rule.match, rule.replacement || '');
+    } else if (typeof rule.match === 'string') {
+      title = title.split(rule.match).join(rule.replacement || '');
+    }
+  }
+
+  return title.replace(/\s{2,}/g, ' ').trim();
 }
 
 function cleanTitle(title, hostname) {
@@ -757,9 +900,16 @@ function checkTabOutDupes() {
    OVERFLOW CHIPS ("+N more" expand button in domain cards)
    ---------------------------------------------------------------- */
 
-function buildOverflowChips(hiddenTabs, urlCounts = {}) {
+function buildTabLabel(tab, groupDomain = '') {
+  let label = cleanTitle(smartTitle(stripTitleNoise(tab.title || '', tab.url), tab.url), groupDomain);
+  const localDevPrefix = getLocalDevLabelPrefix(tab.url);
+  if (localDevPrefix) label = `${localDevPrefix} ${label}`;
+  return label;
+}
+
+function buildOverflowChips(hiddenTabs, urlCounts = {}, groupDomain = '') {
   const hiddenChips = hiddenTabs.map(tab => {
-    const label    = cleanTitle(smartTitle(stripTitleNoise(tab.title || ''), tab.url), '');
+    const label    = buildTabLabel(tab, groupDomain);
     const count    = urlCounts[tab.url] || 1;
     const dupeTag  = count > 1 ? ` <span class="chip-dupe-badge">(${count}x)</span>` : '';
     const chipClass = count > 1 ? ' chip-has-dupes' : '';
@@ -835,12 +985,7 @@ function renderDomainCard(group) {
   const extraCount  = uniqueTabs.length - visibleTabs.length;
 
   const pageChips = visibleTabs.map(tab => {
-    let label = cleanTitle(smartTitle(stripTitleNoise(tab.title || ''), tab.url), group.domain);
-    // For localhost tabs, prepend port number so you can tell projects apart
-    try {
-      const parsed = new URL(tab.url);
-      if (parsed.hostname === 'localhost' && parsed.port) label = `${parsed.port} ${label}`;
-    } catch {}
+    const label = buildTabLabel(tab, group.domain);
     const count    = urlCounts[tab.url];
     const dupeTag  = count > 1 ? ` <span class="chip-dupe-badge">(${count}x)</span>` : '';
     const chipClass = count > 1 ? ' chip-has-dupes' : '';
@@ -861,7 +1006,7 @@ function renderDomainCard(group) {
         </button>
       </div>
     </div>`;
-  }).join('') + (extraCount > 0 ? buildOverflowChips(uniqueTabs.slice(8), urlCounts) : '');
+  }).join('') + (extraCount > 0 ? buildOverflowChips(uniqueTabs.slice(8), urlCounts, group.domain) : '');
 
   let actionsHtml = `
     <button class="action-btn close-tabs" data-action="close-domain-tabs" data-domain-id="${stableId}">
@@ -882,7 +1027,7 @@ function renderDomainCard(group) {
       <div class="status-bar"></div>
       <div class="mission-content">
         <div class="mission-top">
-          <span class="mission-name">${isLanding ? 'Homepages' : (group.label || friendlyDomain(group.domain))}</span>
+          <span class="mission-name">${isLanding ? CONFIG.ui.landingGroupLabel : (group.label || friendlyDomain(group.domain))}</span>
           ${tabBadge}
           ${dupeBadge}
         </div>
@@ -952,7 +1097,7 @@ async function renderDeferredColumn() {
     }
 
   } catch (err) {
-    console.warn('[tab-out] Could not load saved tabs:', err);
+    console.warn('[tab-desk] Could not load saved tabs:', err);
     column.style.display = 'none';
   }
 }
@@ -1020,6 +1165,8 @@ function renderArchiveItem(item) {
  * 6. Renders the "Saved for Later" checklist
  */
 async function renderStaticDashboard() {
+  applyBranding();
+
   // --- Header ---
   const greetingEl = document.getElementById('greeting');
   const dateEl     = document.getElementById('dateDisplay');
@@ -1040,8 +1187,7 @@ async function renderStaticDashboard() {
     { hostname: 'www.linkedin.com',    pathExact: ['/'] },
     { hostname: 'github.com',          pathExact: ['/'] },
     { hostname: 'www.youtube.com',     pathExact: ['/'] },
-    // Merge personal patterns from config.local.js (if it exists)
-    ...(typeof LOCAL_LANDING_PAGE_PATTERNS !== 'undefined' ? LOCAL_LANDING_PAGE_PATTERNS : []),
+    ...(CONFIG.landingPagePatterns || []),
   ];
 
   function isLandingPage(url) {
@@ -1068,7 +1214,7 @@ async function renderStaticDashboard() {
   const landingTabs = [];
 
   // Custom group rules from config.local.js (if any)
-  const customGroups = typeof LOCAL_CUSTOM_GROUPS !== 'undefined' ? LOCAL_CUSTOM_GROUPS : [];
+  const customGroups = CONFIG.customGroups || [];
 
   // Check if a URL matches a custom group rule; returns the rule or null
   function matchCustomGroup(url) {
@@ -1101,6 +1247,18 @@ async function renderStaticDashboard() {
         if (!groupMap[key]) groupMap[key] = { domain: key, label: customRule.groupLabel, tabs: [] };
         groupMap[key].tabs.push(tab);
         continue;
+      }
+
+      if (tab.url) {
+        const parsed = new URL(tab.url);
+        if (isLocalDevHost(parsed.hostname)) {
+          const key = CONFIG.localDev.groupKey || 'local-dev';
+          if (!groupMap[key]) {
+            groupMap[key] = { domain: key, label: CONFIG.localDev.groupLabel || 'Local Dev', tabs: [] };
+          }
+          groupMap[key].tabs.push(tab);
+          continue;
+        }
       }
 
       let hostname;
@@ -1149,7 +1307,7 @@ async function renderStaticDashboard() {
   const openTabsSectionTitle = document.getElementById('openTabsSectionTitle');
 
   if (domainGroups.length > 0 && openTabsSection) {
-    if (openTabsSectionTitle) openTabsSectionTitle.textContent = 'Open tabs';
+    if (openTabsSectionTitle) openTabsSectionTitle.textContent = CONFIG.ui.openTabsTitle;
     openTabsSectionCount.innerHTML = `${domainGroups.length} domain${domainGroups.length !== 1 ? 's' : ''} &nbsp;&middot;&nbsp; <button class="action-btn close-tabs" data-action="close-all-open-tabs" style="font-size:11px;padding:3px 10px;">${ICONS.close} Close all ${realTabs.length} tabs</button>`;
     openTabsMissionsEl.innerHTML = domainGroups.map(g => renderDomainCard(g)).join('');
     openTabsSection.style.display = 'block';
@@ -1198,7 +1356,7 @@ document.addEventListener('click', async (e) => {
       banner.style.opacity = '0';
       setTimeout(() => { banner.style.display = 'none'; banner.style.opacity = '1'; }, 400);
     }
-    showToast('Closed extra Tab Out tabs');
+    showToast(`Closed extra ${CONFIG.brand.shortName} tabs`);
     return;
   }
 
@@ -1275,7 +1433,7 @@ document.addEventListener('click', async (e) => {
     try {
       await saveTabForLater({ url: tabUrl, title: tabTitle });
     } catch (err) {
-      console.error('[tab-out] Failed to save tab:', err);
+      console.error('[tab-desk] Failed to save tab:', err);
       showToast('Failed to save tab');
       return;
     }
@@ -1471,7 +1629,7 @@ document.addEventListener('input', async (e) => {
     archiveList.innerHTML = results.map(item => renderArchiveItem(item)).join('')
       || '<div style="font-size:12px;color:var(--muted);padding:8px 0">No results</div>';
   } catch (err) {
-    console.warn('[tab-out] Archive search failed:', err);
+    console.warn('[tab-desk] Archive search failed:', err);
   }
 });
 
